@@ -18,6 +18,8 @@ package tenant
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -411,11 +413,83 @@ func (t *tenantOperator) ListNamespaces(user user.Info, workspace string, queryP
 	return result, nil
 }
 
-// CreateNamespace adds a workspace label to namespace which indicates namespace is under the workspace
-// The reason here why don't check the existence of workspace anymore is this function is only executed in host cluster.
-// but if the host cluster is not authorized to workspace, there will be no workspace in host cluster.
+// CreateNamespace creates a namespace with an auto-generated name (ns-<8 hex chars>).
+// The user-provided name is stored as an alias in annotations["kubesphere.io/alias-name"].
+// It enforces alias-name uniqueness within the same workspace.
 func (t *tenantOperator) CreateNamespace(workspace string, namespace *corev1.Namespace) (*corev1.Namespace, error) {
+	// Determine the alias-name: prefer existing annotation, fallback to metadata.name
+	aliasName := namespace.Name
+	if namespace.Annotations != nil {
+		if v, ok := namespace.Annotations["kubesphere.io/alias-name"]; ok && v != "" {
+			aliasName = v
+		}
+	}
+
+	// Validate alias-name is not empty
+	if aliasName == "" {
+		return nil, errors.NewBadRequest("namespace alias-name must not be empty")
+	}
+
+	// Check alias-name uniqueness within the workspace
+	if err := t.checkNamespaceAliasConflict(workspace, aliasName); err != nil {
+		return nil, err
+	}
+
+	// Generate a unique namespace name: ns-<8 hex chars>
+	realName, err := generateNamespaceName(t.k8sclient)
+	if err != nil {
+		return nil, err
+	}
+	namespace.Name = realName
+
+	// Ensure annotations map exists and set alias-name
+	if namespace.Annotations == nil {
+		namespace.Annotations = make(map[string]string)
+	}
+	namespace.Annotations["kubesphere.io/alias-name"] = aliasName
+
 	return t.k8sclient.CoreV1().Namespaces().Create(context.Background(), labelNamespaceWithWorkspaceName(namespace, workspace), metav1.CreateOptions{})
+}
+
+// generateNamespaceName generates a unique namespace name in the format ns-<8 hex chars>.
+// It retries up to 5 times in case of collision.
+func generateNamespaceName(k8sclient kubernetes.Interface) (string, error) {
+	for i := 0; i < 5; i++ {
+		b := make([]byte, 4)
+		if _, err := rand.Read(b); err != nil {
+			return "", fmt.Errorf("failed to generate random bytes: %v", err)
+		}
+		name := "ns-" + hex.EncodeToString(b)
+
+		// Check if this name already exists
+		_, err := k8sclient.CoreV1().Namespaces().Get(context.Background(), name, metav1.GetOptions{})
+		if errors.IsNotFound(err) {
+			return name, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		// Name exists, retry
+	}
+	return "", fmt.Errorf("failed to generate unique namespace name after 5 attempts")
+}
+
+// checkNamespaceAliasConflict checks whether the given alias-name already exists
+// in any namespace within the specified workspace.
+func (t *tenantOperator) checkNamespaceAliasConflict(workspace, aliasName string) error {
+	nsList, err := t.k8sclient.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("%s=%s", tenantv1alpha1.WorkspaceLabel, workspace),
+	})
+	if err != nil {
+		return err
+	}
+	for _, ns := range nsList.Items {
+		if ns.Annotations != nil && ns.Annotations["kubesphere.io/alias-name"] == aliasName {
+			return errors.NewConflict(corev1.Resource("namespaces"), aliasName,
+				fmt.Errorf("alias name %q already exists in workspace %q", aliasName, workspace))
+		}
+	}
+	return nil
 }
 
 // labelNamespaceWithWorkspaceName adds a kubesphere.io/workspace=[workspaceName] label to namespace which
