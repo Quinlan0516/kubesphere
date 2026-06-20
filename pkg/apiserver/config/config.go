@@ -357,6 +357,10 @@ func (conf *Config) stripEmptyOptions() {
 		conf.EdgeRuntimeOptions = nil
 	}
 
+	if conf.GatewayOptions != nil && conf.GatewayOptions.IsEmpty() {
+		conf.GatewayOptions = nil
+	}
+
 	if conf.GPUOptions != nil && len(conf.GPUOptions.Kinds) == 0 {
 		conf.GPUOptions = nil
 	}
