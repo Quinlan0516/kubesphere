@@ -45,4 +45,5 @@ jobs:
         if: github.event_name == 'push'
         run: |
           IMAGE_OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          REPO=ghcr.io/${IMAGE_OWNER_LOWER} TAG="${GITHUB_REF#refs/*/}" make container-cross-push
+          TAG="$(git rev-parse --short HEAD)-$(date '+%Y%m%d%H%M%S')"
+          REPO=ghcr.io/${IMAGE_OWNER_LOWER} TAG=${TAG} make container-cross-push
