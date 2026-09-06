@@ -1,0 +1,42 @@
+name: Quinlan CI
+
+on:
+  push:
+    branches: ["release-3.4.1_dev"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push images
+        run: |
+          IMAGE_OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          TAG=$(git rev-parse --short HEAD)-$(date '+%Y%m%d%H%M%S')
+
+          # ks-apiserver
+          APISERVER_IMAGE=ghcr.io/${IMAGE_OWNER_LOWER}/ks-apiserver
+          docker build -t ${APISERVER_IMAGE}:${TAG} -t ${APISERVER_IMAGE}:latest -f build/ks-apiserver/Dockerfile .
+          docker push ${APISERVER_IMAGE}:${TAG}
+          docker push ${APISERVER_IMAGE}:latest
+
+          # ks-controller-manager
+          CONTROLLER_IMAGE=ghcr.io/${IMAGE_OWNER_LOWER}/ks-controller-manager
+          docker build -t ${CONTROLLER_IMAGE}:${TAG} -t ${CONTROLLER_IMAGE}:latest -f build/ks-controller-manager/Dockerfile .
+          docker push ${CONTROLLER_IMAGE}:${TAG}
+          docker push ${CONTROLLER_IMAGE}:latest
